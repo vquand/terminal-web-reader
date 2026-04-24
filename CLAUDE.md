@@ -12,9 +12,9 @@ cargo test <module>::tests::<name>      # e.g. plugins::sangtacviet::tests::pars
 
 # Run against a chapter URL (headless browser):
 TWR_CHROME="$HOME/Library/Caches/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" \
-  cargo run -- 'https://sangtacviet.vip/truyen/yushubo/1/134050/1/'
+  cargo run -- '<CHAPTER_URL>'
 
-cargo run -- --print https://example.com/   # stdout mode, skips the TUI
+cargo run -- --print <URL>   # stdout mode, skips the TUI
 ```
 
 `TWR_CHROME` is read by `SangtacvietPlugin`; unset → chromiumoxide auto-detects. Without the `js` feature, the binary still builds but has no sangtacviet support and never touches chromium.

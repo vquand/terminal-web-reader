@@ -77,8 +77,8 @@ echo 'export TWR_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google C
 
 ```bash
 twr --version
-twr --print https://example.com/           # static site, no chromium needed
-twr 'https://sangtacviet.vip/truyen/yushubo/1/134050/1/'   # TUI, exercises chromium
+twr --print <URL>      # static site, no chromium needed
+twr '<CHAPTER_URL>'    # TUI mode; exercises chromium for sites that need it
 ```
 
 If the last command hangs or errors with "launch chromium" → either

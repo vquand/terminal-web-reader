@@ -16,9 +16,8 @@ playwright install chromium
 ## Run the sangtacviet probe
 
 ```bash
-python3 poc/sangtacviet_probe.py
-# or another chapter URL:
-python3 poc/sangtacviet_probe.py https://sangtacviet.vip/truyen/yushubo/1/134050/2/
+python3 poc/sangtacviet_probe.py            # uses the default seed URL in the script
+python3 poc/sangtacviet_probe.py <URL>      # or point it at any sangtacviet chapter
 ```
 
 ## What to share back

@@ -19,13 +19,15 @@ export TWR_CHROME="/path/to/Chromium"        # only needed if auto-detect fails
 ## Usage
 
 ```bash
-twr https://sangtacviet.vip/truyen/yushubo/1/134050/1/   # open a chapter
-twr --resume                                              # continue where you left off
-twr --bookmark yushubo-saved                              # jump to a bookmark
-twr --list-bookmarks                                      # list saved bookmarks
-twr --print https://example.com/                          # stdout, no TUI
-twr --print --follow 3 https://example.com/chapter/1      # stdout + 3 more chapters
+twr <URL>                             # open a chapter / article
+twr --resume                          # continue where you left off
+twr --bookmark <NAME>                 # jump to a saved bookmark
+twr --list-bookmarks                  # list saved bookmarks
+twr --print <URL>                     # stdout, no TUI
+twr --print --follow 3 <URL>          # stdout + 3 more chapters via `next` links
 ```
+
+Sangtacviet chapter URLs look like `https://sangtacviet.vip/truyen/<host>/1/<book-id>/<chapter>/`.
 
 ## Keybindings
 
