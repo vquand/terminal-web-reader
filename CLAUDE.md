@@ -33,7 +33,7 @@ Dispatch is first-match via `Registry::resolve` — specific plugins register be
 
 `SangtacvietPlugin` is **only compiled with `--features js`** (gated in `src/plugins/mod.rs`). When `js` is off, the plugin file isn't included; registry just has `GenericPlugin`.
 
-**Why some sites need chromiumoxide.** Sangtacviet validates session state via a JS-computed value we couldn't reproduce from pure reqwest. The POC (`poc/sangtacviet_probe.py`) confirmed this: equal cookies + equal headers → browser gets `{"code":"0"}`, scripted client gets `{"code":"5","err":"mã 4002"}`. Rule of thumb from `docs/plugins.md`: if a cookie/header replay yields different results from the browser, stop reverse-engineering and use chromiumoxide.
+**Why some sites need chromiumoxide.** Sangtacviet validates session state via a JS-computed value we couldn't reproduce from pure reqwest. The POC (`poc/sangtacviet_probe.py`) confirmed this: equal cookies + equal headers → browser gets `{"code":"0"}`, scripted client gets `{"code":"5","err":"mã 4002"}`. Rule of thumb from `docs/writing-plugins.md`: if a cookie/header replay yields different results from the browser, stop reverse-engineering and use chromiumoxide.
 
 **TUI state machine** (`src/app.rs`). Three modes: `Loading { rx: oneshot::Receiver }` → `Reading { scroll }` → `Error`. Fetches run in `tokio::spawn`; `App::poll_fetch` is called on every tick and advances the state on channel recv. Arrow keys call `start_fetch` with a new URL (scroll=0); scroll keys mutate `Mode::Reading::scroll` directly.
 
@@ -51,7 +51,7 @@ Apple's system `curl` is linked against **LibreSSL** and silently fails TLS hand
 
 ## Plugin authoring
 
-See `docs/plugins.md` for the full guide. Critical points not obvious from reading the trait:
+See `docs/writing-plugins.md` for the full guide; `docs/plugins/` has a usage doc per shipping plugin. Critical points not obvious from reading the trait:
 
 - For headless plugins, cookies must be pre-seeded via `Browser::set_cookies` with `cookie.url` set — `Page::set_cookies` validates the current page URL against `about:blank` and rejects.
 - `navigator.webdriver` must be hidden *before* page scripts run: use `page.evaluate_on_new_document()`, not a post-goto `evaluate`.

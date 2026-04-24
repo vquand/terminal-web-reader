@@ -27,7 +27,8 @@ twr --print <URL>                     # stdout, no TUI
 twr --print --follow 3 <URL>          # stdout + 3 more chapters via `next` links
 ```
 
-Sangtacviet chapter URLs look like `https://sangtacviet.vip/truyen/<host>/1/<book-id>/<chapter>/`.
+For the per-site URL shapes, quirks, and requirements of each shipping plugin,
+see [`docs/plugins/`](docs/plugins/).
 
 ## Keybindings
 
@@ -57,17 +58,11 @@ the same book at a different chapter starts fresh at line 0.
 
 ## How it works
 
-Each site gets its own plugin implementing the `SitePlugin` trait:
+Each site gets its own plugin implementing the `SitePlugin` trait. Dispatch
+is first-match, so specific plugins register before the `generic` catch-all.
 
-- `GenericPlugin` — static `reqwest` fetch, `dom_smoothie` readability extraction,
-  rel=next/prev plus text heuristics in EN/CN/JP/VN.
-- `SangtacvietPlugin` — headless Chromium via `chromiumoxide`. Hides
-  `navigator.webdriver`, pre-seeds a `foreignlang=vi` cookie to skip the site's
-  language modal, clicks `#maincontent` to trigger the chapter XHR, waits for
-  `innerText > 500` chars, and reads the rendered DOM. Next/prev is URL
-  arithmetic on the `/truyen/<host>/1/<book>/<chap>/` path.
-
-Adding a new site is a small Rust file — see [`docs/plugins.md`](docs/plugins.md).
+- Per-plugin usage docs: [`docs/plugins/`](docs/plugins/)
+- How to write your own: [`docs/writing-plugins.md`](docs/writing-plugins.md)
 
 ## Development
 
