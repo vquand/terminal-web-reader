@@ -5,8 +5,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::network::CookieParam;
+use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
+use chromiumoxide::js::EvaluationResult;
+use chromiumoxide::Page;
 use futures::StreamExt;
 use scraper::{Html, Selector};
+use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::plugin::{Article, RenderedPage, SitePlugin};
@@ -27,10 +31,7 @@ impl SangtacvietPlugin {
         if url.host_str()? != DOMAIN {
             return None;
         }
-        let segs: Vec<&str> = url
-            .path_segments()?
-            .filter(|s| !s.is_empty())
-            .collect();
+        let segs: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();
         if segs.len() < 5 || segs[0] != "truyen" {
             return None;
         }
@@ -80,7 +81,7 @@ impl SitePlugin for SangtacvietPlugin {
 
         let (mut browser, mut handler) = Browser::launch(config)
             .await
-            .context("launch chromium — set TWR_CHROME to a Chromium/Chrome binary if autodetect fails")?;
+            .context("launch chromium; set TWR_CHROME to a Chromium/Chrome binary if autodetect fails")?;
         let handler_task = tokio::spawn(async move {
             while let Some(h) = handler.next().await {
                 if h.is_err() {
@@ -89,8 +90,6 @@ impl SitePlugin for SangtacvietPlugin {
             }
         });
 
-        // Pre-seed cookies at the browser context level — page.set_cookies() rejects
-        // while on about:blank because it validates the page's URL.
         let origin = format!("https://{DOMAIN}/");
         let cookie_result = browser
             .set_cookies(vec![
@@ -122,8 +121,6 @@ impl SitePlugin for SangtacvietPlugin {
 
     fn extract(&self, page: &RenderedPage) -> Result<Article> {
         let doc = Html::parse_document(&page.html);
-        // After successful chapter load the JS renames #maincontent to cld-<bookid>-<chapter>.
-        // Pre-load it's still #maincontent, but then body_text will be short and we'll error.
         let body_sel =
             Selector::parse(r#"[id^="cld-"], #maincontent"#).map_err(|e| anyhow!("{e:?}"))?;
         let body_el = doc
@@ -132,7 +129,7 @@ impl SitePlugin for SangtacvietPlugin {
             .ok_or_else(|| anyhow!("chapter container not found"))?;
         let body_text = body_el.text().collect::<String>();
         let body_text = body_text.trim();
-        if body_text.contains("Nhấp vào để tải chương") || body_text.len() < 200 {
+        if body_text.len() < 200 {
             bail!("chapter body never loaded (still showing placeholder)");
         }
 
@@ -169,53 +166,108 @@ impl SitePlugin for SangtacvietPlugin {
 async fn run_fetch(browser: &mut Browser, url: &Url) -> Result<RenderedPage> {
     let page = browser.new_page("about:blank").await?;
 
-    // Hide navigator.webdriver before any page script runs.
     page.evaluate_on_new_document(
         "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });",
     )
-    .await?;
+    .await
+    .context("install webdriver-hiding init script")?;
 
-    page.goto(url.as_str()).await?;
+    page.goto(url.as_str()).await.context("navigate to chapter")?;
 
-    // Let stv.readinit.js bind its click handler on #maincontent.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // The real trigger is a click on #maincontent (the parent div, not its <center> child).
     let el = page
         .find_element("#maincontent")
         .await
         .context("#maincontent not on page")?;
     el.click().await.context("click #maincontent failed")?;
 
-    // Poll until chapter text materializes (innerText > 500 chars). If the XHR returns
-    // `{"code":7}` (throttle), the text never appears and we time out — caller can retry.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if tokio::time::Instant::now() > deadline {
             bail!("timed out waiting for chapter text to load");
         }
-        let len_val = page
-            .evaluate(
-                r#"(() => {
-                    const el = document.querySelector('[id^="cld-"]') || document.getElementById('maincontent');
-                    const t = (el && el.innerText) || '';
-                    if (t.includes('Nhấp vào để tải chương')) return 0;
-                    return t.length;
-                })()"#,
-            )
-            .await?;
-        let len: u64 = len_val.into_value().unwrap_or(0);
+        let len: u64 = evaluate_with_context_retry(
+            &page,
+            r#"(() => {
+                const el = document.querySelector('[id^="cld-"]') || document.getElementById('maincontent');
+                const t = (el && el.innerText) || '';
+                return t.length;
+            })()"#,
+        )
+        .await
+        .context("poll chapter text length")?;
         if len > 500 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    let html = page.content().await?;
+    let html = evaluate_with_context_retry(
+        &page,
+        r#"(() => {
+            let retVal = '';
+            if (document.doctype) {
+                retVal = new XMLSerializer().serializeToString(document.doctype);
+            }
+            if (document.documentElement) {
+                retVal += document.documentElement.outerHTML;
+            }
+            return retVal;
+        })()"#,
+    )
+    .await
+    .context("read rendered page content")?;
+
     Ok(RenderedPage {
         url: url.clone(),
         html,
     })
+}
+
+async fn evaluate_with_context_retry<T>(page: &Page, expression: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let mut last_error = None;
+    for _ in 0..5 {
+        match evaluate_without_context(page, expression).await {
+            Ok(value) => return Ok(value),
+            Err(e) if is_missing_execution_context(&e) => {
+                last_error = Some(e);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("runtime evaluation failed")))
+}
+
+async fn evaluate_without_context<T>(page: &Page, expression: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let params = EvaluateParams::builder()
+        .expression(expression)
+        .return_by_value(true)
+        .await_promise(true)
+        .build()
+        .map_err(|e| anyhow!("runtime evaluate params: {e}"))?;
+
+    let response = page.execute(params).await.context("runtime evaluate")?;
+    if let Some(exception) = response.result.exception_details {
+        bail!("javascript exception during runtime evaluate: {exception:?}");
+    }
+
+    EvaluationResult::new(response.result.result)
+        .into_value()
+        .context("deserialize runtime evaluation result")
+}
+
+fn is_missing_execution_context(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}");
+    text.contains("Cannot find context with specified id")
 }
 
 #[cfg(test)]
