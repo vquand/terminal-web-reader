@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use url::Url;
 
-use crate::app::{App, Mode};
+use crate::app::{App, MAX_FONT_SIZE_STEP, MIN_FONT_SIZE_STEP, Mode};
 
 const INDENT: &str = "  ";
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -77,6 +77,8 @@ fn footer_line() -> Line<'static> {
         Span::styled(" next  ", dim),
         Span::styled("[↑/↓]", key),
         Span::styled(" scroll  ", dim),
+        Span::styled("[Ctrl+=/-]", key),
+        Span::styled(" font  ", dim),
         Span::styled("[q]", key),
         Span::styled(" quit ─", dim),
     ])
@@ -125,7 +127,7 @@ fn status_line(app: &App) -> Paragraph<'static> {
                 ),
             )
         }
-        Mode::Error { message } => (err, "ERR ", truncate(message, 200)),
+        Mode::Error { message, .. } => (err, "ERR ", truncate(message, 200)),
     };
 
     let mut spans = vec![
@@ -152,8 +154,10 @@ fn render_body(f: &mut Frame, app: &App, area: Rect) {
             format!("{INDENT}// awaiting chapter content…"),
             Style::default().fg(Color::DarkGray),
         ))],
-        Mode::Reading { article, .. } => body_lines(&article.body_text, area.width),
-        Mode::Error { message } => vec![
+        Mode::Reading { article, .. } => {
+            body_lines(&article.body_text, area.width, app.state.font_size_step)
+        }
+        Mode::Error { message, .. } => vec![
             Line::from(Span::styled(
                 format!("{INDENT}panic: {message}"),
                 Style::default().fg(Color::Red),
@@ -178,10 +182,11 @@ fn render_body(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn body_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+fn body_lines(text: &str, width: u16, font_size_step: i8) -> Vec<Line<'static>> {
     // Width minus the 2-char indent. Give a little right padding to avoid cramped
     // wraps. Clamp to something sane on narrow terminals.
-    let wrap_width = (width as usize).saturating_sub(INDENT.len() + 2).max(20);
+    let base_width = (width as usize).saturating_sub(INDENT.len() + 2).max(20);
+    let wrap_width = scaled_wrap_width(base_width, font_size_step);
     let normalized = normalize_whitespace(text);
     let paragraphs: Vec<&str> = normalized
         .split("\n\n")
@@ -201,6 +206,21 @@ fn body_lines(text: &str, width: u16) -> Vec<Line<'static>> {
         out.push(Line::from(format!("{INDENT}(empty chapter)")));
     }
     out
+}
+
+fn scaled_wrap_width(base_width: usize, font_size_step: i8) -> usize {
+    let step = font_size_step.clamp(MIN_FONT_SIZE_STEP, MAX_FONT_SIZE_STEP);
+    let percent = match step {
+        -3 => 145,
+        -2 => 130,
+        -1 => 115,
+        0 => 100,
+        1 => 88,
+        2 => 78,
+        3 => 70,
+        _ => unreachable!(),
+    };
+    (base_width * percent / 100).max(20)
 }
 
 fn normalize_whitespace(text: &str) -> String {
@@ -266,7 +286,7 @@ pub fn max_scroll(app: &App, body_height: u16) -> u16 {
     match &app.mode {
         Mode::Reading { article, .. } => {
             let width = app.size.0.saturating_sub(4); // inside borders
-            let lines = body_lines(&article.body_text, width);
+            let lines = body_lines(&article.body_text, width, app.state.font_size_step);
             (lines.len() as u16).saturating_sub(body_height)
         }
         _ => 0,

@@ -23,6 +23,7 @@ twr <URL>                             # open a chapter / article
 twr --resume                          # continue where you left off
 twr --bookmark <NAME>                 # jump to a saved bookmark
 twr --list-bookmarks                  # list saved bookmarks
+twr --update                          # git pull + rebuild/reinstall
 twr --print <URL>                     # stdout, no TUI
 twr --print --follow 3 <URL>          # stdout + 3 more chapters via `next` links
 ```
@@ -40,6 +41,7 @@ see [`docs/plugins/`](docs/plugins/).
 | `Space` / `PgDn` / `PgUp` | scroll one page                  |
 | `g` / `Home`   | jump to top                                |
 | `G` / `End`    | jump to bottom                             |
+| `Ctrl-=` / `Ctrl--` | increase / decrease reader font size  |
 | `b`            | bookmark current chapter                   |
 | `r`            | reload current chapter                     |
 | **`Ctrl-B`**   | **boss key** — swap for a fake log pane    |
@@ -50,7 +52,7 @@ see [`docs/plugins/`](docs/plugins/).
 Everything lives in the platform config dir (`~/Library/Application Support/twr/`
 on macOS, `$XDG_CONFIG_HOME/twr/` on Linux):
 
-- `state.toml` — per-domain history entry (`{ url, scroll, saved_at }`) + named bookmarks
+- `state.toml` — per-domain history entry (`{ url, scroll, saved_at }`) + named bookmarks + reader font size
 - `twr.log` — tracing output (TUI mode only; `--print` mode writes to stderr)
 
 Scroll offset is restored only when re-opening the exact same URL — re-opening

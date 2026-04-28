@@ -13,6 +13,8 @@ pub struct Article {
     pub title: Option<String>,
     pub byline: Option<String>,
     pub body_text: String,
+    pub next_url: Option<Url>,
+    pub prev_url: Option<Url>,
 }
 
 #[async_trait]

@@ -9,6 +9,9 @@ use crate::bosskey::BossState;
 use crate::plugin::{Article, Registry};
 use crate::state::{Bookmark, State, now_unix};
 
+pub const MIN_FONT_SIZE_STEP: i8 = -3;
+pub const MAX_FONT_SIZE_STEP: i8 = 3;
+
 pub enum Mode {
     Loading {
         url: Url,
@@ -23,6 +26,8 @@ pub enum Mode {
         loaded_in: Duration,
     },
     Error {
+        url: Option<Url>,
+        restore_scroll: u16,
         message: String,
     },
 }
@@ -44,6 +49,8 @@ impl App {
             registry,
             state,
             mode: Mode::Error {
+                url: None,
+                restore_scroll: 0,
                 message: "initializing".into(),
             },
             tick: 0,
@@ -68,7 +75,13 @@ impl App {
                     .fetch(&url_for_task)
                     .await
                     .with_context(|| format!("fetch {url_for_task}"))?;
-                let article = plugin.extract(&page)?;
+                let mut article = plugin.extract(&page)?;
+                if article.next_url.is_none() {
+                    article.next_url = plugin.next(&page);
+                }
+                if article.prev_url.is_none() {
+                    article.prev_url = plugin.prev(&page);
+                }
                 Ok::<_, anyhow::Error>(article)
             }
             .await;
@@ -98,6 +111,8 @@ impl App {
         let (url, started_at, restore_scroll) = match std::mem::replace(
             &mut self.mode,
             Mode::Error {
+                url: None,
+                restore_scroll: 0,
                 message: String::new(),
             },
         ) {
@@ -127,22 +142,33 @@ impl App {
             }
             Err(e) => {
                 self.mode = Mode::Error {
+                    url: Some(url),
+                    restore_scroll,
                     message: format!("{e:#}"),
                 };
             }
         }
     }
 
+    pub fn retry_current(&mut self) {
+        let target = match &self.mode {
+            Mode::Reading { url, scroll, .. } => Some((url.clone(), *scroll)),
+            Mode::Error {
+                url: Some(url),
+                restore_scroll,
+                ..
+            } => Some((url.clone(), *restore_scroll)),
+            _ => None,
+        };
+
+        if let Some((url, scroll)) = target {
+            self.start_fetch(url, scroll);
+        }
+    }
+
     pub fn next_chapter(&mut self) {
         let url = match &self.mode {
-            Mode::Reading { url, .. } => {
-                let plugin = self.registry.resolve(url);
-                let page = crate::plugin::RenderedPage {
-                    url: url.clone(),
-                    html: String::new(),
-                };
-                plugin.next(&page)
-            }
+            Mode::Reading { article, .. } => article.next_url.clone(),
             _ => None,
         };
         if let Some(u) = url {
@@ -152,14 +178,7 @@ impl App {
 
     pub fn prev_chapter(&mut self) {
         let url = match &self.mode {
-            Mode::Reading { url, .. } => {
-                let plugin = self.registry.resolve(url);
-                let page = crate::plugin::RenderedPage {
-                    url: url.clone(),
-                    html: String::new(),
-                };
-                plugin.prev(&page)
-            }
+            Mode::Reading { article, .. } => article.prev_url.clone(),
             _ => None,
         };
         if let Some(u) = url {
@@ -172,6 +191,30 @@ impl App {
             let new = (*scroll as i32 + delta).clamp(0, max as i32);
             *scroll = new as u16;
         }
+    }
+
+    pub fn clamp_scroll(&mut self, max: u16) {
+        if let Mode::Reading { scroll, .. } = &mut self.mode {
+            *scroll = (*scroll).min(max);
+        }
+    }
+
+    pub fn adjust_font_size(&mut self, delta: i8) {
+        let old = self.state.font_size_step;
+        self.state.font_size_step = (old + delta).clamp(MIN_FONT_SIZE_STEP, MAX_FONT_SIZE_STEP);
+
+        if self.state.font_size_step == old {
+            self.flash = Some(("font size limit reached".into(), Instant::now()));
+            return;
+        }
+
+        let label = match self.state.font_size_step {
+            0 => "font size: default".to_string(),
+            n if n > 0 => format!("font size: +{n}"),
+            n => format!("font size: {n}"),
+        };
+        let _ = self.state.save();
+        self.flash = Some((label, Instant::now()));
     }
 
     /// Save current reading position to disk. Called on quit and on chapter

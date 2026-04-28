@@ -26,6 +26,16 @@ cargo install --path . --no-default-features   # no chromium dep, loses sangtacv
 `cargo install` places the binary at `~/.cargo/bin/twr`. That directory is
 already on PATH for most Rust setups; verify with `which twr`.
 
+To rebuild an existing checkout and replace the installed binary:
+
+```bash
+cd terminal-web-reader
+cargo install --path .
+```
+
+After installing a version that includes it, `twr --update` can pull the latest
+git version from that checkout and reinstall itself.
+
 > **Common mistake:** `--path .` resolves against your current working
 > directory. If you get `does not contain a Cargo.toml file`, you're not in
 > the project root. Either `cd` first or pass an absolute path:

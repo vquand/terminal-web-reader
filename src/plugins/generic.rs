@@ -57,6 +57,8 @@ impl SitePlugin for GenericPlugin {
             title: (!art.title.is_empty()).then(|| art.title.to_string()),
             byline: art.byline,
             body_text: art.text_content.to_string(),
+            next_url: find_rel_or_text(&page.html, &page.url, Direction::Next),
+            prev_url: find_rel_or_text(&page.html, &page.url, Direction::Prev),
         })
     }
 

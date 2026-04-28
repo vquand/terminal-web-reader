@@ -38,22 +38,12 @@ impl SangtacvietPlugin {
         let host = segs[1].to_string();
         let book: u64 = segs[3].parse().ok()?;
         let chap: u64 = segs[4].parse().ok()?;
+        if book == 0 || chap == 0 {
+            return None;
+        }
         Some((host, book, chap))
     }
 
-    fn build_chapter_url(host: &str, book: u64, chap: u64) -> Url {
-        Url::parse(&format!("https://{DOMAIN}/truyen/{host}/1/{book}/{chap}/"))
-            .expect("chapter URL components are static")
-    }
-
-    fn neighbor_url(&self, page_url: &Url, delta: i64) -> Option<Url> {
-        let (host, book, chap) = Self::parse_chapter_url(page_url)?;
-        let next = chap as i64 + delta;
-        if next < 1 {
-            return None;
-        }
-        Some(Self::build_chapter_url(&host, book, next as u64))
-    }
 }
 
 #[async_trait]
@@ -151,16 +141,44 @@ impl SitePlugin for SangtacvietPlugin {
             title,
             byline,
             body_text: body_text.to_string(),
+            next_url: find_nav_url(page, &["navnexttop", "navnextbot"]),
+            prev_url: find_nav_url(page, &["navprevtop", "navprevbot"]),
         })
     }
 
     fn next(&self, page: &RenderedPage) -> Option<Url> {
-        self.neighbor_url(&page.url, 1)
+        find_nav_url(page, &["navnexttop", "navnextbot"])
     }
 
     fn prev(&self, page: &RenderedPage) -> Option<Url> {
-        self.neighbor_url(&page.url, -1)
+        find_nav_url(page, &["navprevtop", "navprevbot"])
     }
+}
+
+fn find_nav_url(page: &RenderedPage, ids: &[&str]) -> Option<Url> {
+    let doc = Html::parse_document(&page.html);
+    for id in ids {
+        let Ok(selector) = Selector::parse(&format!(r#"a#{id}[href]"#)) else {
+            continue;
+        };
+        let Some(href) = doc
+            .select(&selector)
+            .next()
+            .and_then(|el| el.value().attr("href"))
+            .map(str::trim)
+            .filter(|href| !href.is_empty() && *href != "#")
+        else {
+            continue;
+        };
+        let Ok(url) = page.url.join(href) else {
+            continue;
+        };
+        if SangtacvietPlugin::parse_chapter_url(&url).is_some() {
+            return Some(url);
+        }
+    }
+
+    None
 }
 
 async fn run_fetch(browser: &mut Browser, url: &Url) -> Result<RenderedPage> {
@@ -174,13 +192,8 @@ async fn run_fetch(browser: &mut Browser, url: &Url) -> Result<RenderedPage> {
 
     page.goto(url.as_str()).await.context("navigate to chapter")?;
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let el = page
-        .find_element("#maincontent")
-        .await
-        .context("#maincontent not on page")?;
-    el.click().await.context("click #maincontent failed")?;
+    wait_for_maincontent(&page).await?;
+    click_maincontent(&page).await?;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -270,6 +283,57 @@ fn is_missing_execution_context(error: &anyhow::Error) -> bool {
     text.contains("Cannot find context with specified id")
 }
 
+async fn wait_for_maincontent(page: &chromiumoxide::Page) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            bail!("chapter shell did not expose #maincontent");
+        }
+
+        let has_container = page
+            .evaluate(
+                r#"(() => Boolean(
+                    document.getElementById('maincontent') ||
+                    document.querySelector('[id^="cld-"]')
+                ))()"#,
+            )
+            .await?
+            .into_value()
+            .unwrap_or(false);
+
+        if has_container {
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn click_maincontent(page: &chromiumoxide::Page) -> Result<()> {
+    let clicked = page
+        .evaluate(
+            r#"(() => {
+                const el = document.getElementById('maincontent');
+                if (!el) return Boolean(document.querySelector('[id^="cld-"]'));
+                el.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                }));
+                return true;
+            })()"#,
+        )
+        .await?
+        .into_value()
+        .unwrap_or(false);
+
+    if !clicked {
+        bail!("chapter container disappeared before click");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,26 +354,53 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_chapter_ids() {
+        let u = Url::parse("https://sangtacviet.vip/truyen/qidian/1/1048763609/0/").unwrap();
+        assert!(SangtacvietPlugin::parse_chapter_url(&u).is_none());
+    }
+
+    #[test]
     fn rejects_other_domains() {
         let u = Url::parse("https://other.vip/truyen/yushubo/1/134050/1/").unwrap();
         assert!(SangtacvietPlugin::parse_chapter_url(&u).is_none());
     }
 
     #[test]
-    fn next_increments_chapter() {
+    fn next_uses_loaded_nav_href() {
         let plugin = SangtacvietPlugin::new();
-        let src = Url::parse("https://sangtacviet.vip/truyen/yushubo/1/134050/7/").unwrap();
-        let n = plugin.neighbor_url(&src, 1).unwrap();
+        let page = RenderedPage {
+            url: Url::parse("https://sangtacviet.vip/truyen/qidian/1/1048763609/898166880/")
+                .unwrap(),
+            html: r#"<a id="navnexttop" href="/truyen/qidian/1/1048763609/899124135/">Chương sau</a>"#
+                .to_string(),
+        };
+        let n = plugin.next(&page).unwrap();
         assert_eq!(
             n.as_str(),
-            "https://sangtacviet.vip/truyen/yushubo/1/134050/8/"
+            "https://sangtacviet.vip/truyen/qidian/1/1048763609/899124135/"
         );
     }
 
     #[test]
-    fn prev_stops_at_chapter_1() {
+    fn missing_nav_returns_none() {
         let plugin = SangtacvietPlugin::new();
-        let src = Url::parse("https://sangtacviet.vip/truyen/yushubo/1/134050/1/").unwrap();
-        assert!(plugin.neighbor_url(&src, -1).is_none());
+        let page = RenderedPage {
+            url: Url::parse("https://sangtacviet.vip/truyen/qidian/1/1048763609/898166880/")
+                .unwrap(),
+            html: r#"<a id="navnexttop" href="">Chương sau</a>"#.to_string(),
+        };
+        assert!(plugin.next(&page).is_none());
+    }
+
+    #[test]
+    fn zero_nav_href_returns_none() {
+        let plugin = SangtacvietPlugin::new();
+        let page = RenderedPage {
+            url: Url::parse("https://sangtacviet.vip/truyen/qidian/1/1048763609/898166880/")
+                .unwrap(),
+            html: r#"<a id="navnexttop" href="/truyen/qidian/1/1048763609/0/">Chương sau</a>"#
+                .to_string(),
+        };
+        assert!(plugin.next(&page).is_none());
     }
 }

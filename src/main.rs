@@ -6,6 +6,8 @@ mod state;
 mod ui;
 
 use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,7 +21,7 @@ use ratatui::backend::CrosstermBackend;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-use crate::app::{App, Mode};
+use crate::app::App;
 use crate::plugin::Registry;
 use crate::plugins::generic::GenericPlugin;
 use crate::state::State;
@@ -42,6 +44,13 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["url", "resume", "bookmark"])]
     list_bookmarks: bool,
 
+    /// Pull the latest git checkout and reinstall this binary.
+    #[arg(
+        long,
+        conflicts_with_all = ["url", "resume", "bookmark", "list_bookmarks", "print", "follow"]
+    )]
+    update: bool,
+
     /// Print extracted text to stdout instead of launching the TUI.
     #[arg(long)]
     print: bool,
@@ -54,6 +63,10 @@ struct Cli {
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.update {
+        return run_update();
+    }
+
     init_tracing(&cli);
     let state = State::load();
 
@@ -78,6 +91,52 @@ async fn main() -> Result<()> {
     run_tui(registry, state, url).await
 }
 
+fn run_update() -> Result<()> {
+    let repo = update_repo_path()?;
+    println!("updating {}", repo.display());
+    run_command(Command::new("git").arg("-C").arg(&repo).arg("pull").arg("--ff-only"))?;
+    run_command(Command::new("cargo").arg("install").arg("--path").arg(&repo))?;
+    println!("updated twr");
+    Ok(())
+}
+
+fn update_repo_path() -> Result<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if is_git_checkout(&manifest_dir) {
+        return Ok(manifest_dir);
+    }
+
+    let cwd = std::env::current_dir().context("read current directory")?;
+    if is_git_checkout(&cwd) {
+        return Ok(cwd);
+    }
+
+    bail!(
+        "--update could not find the source git checkout; run from the terminal-web-reader repo"
+    );
+}
+
+fn is_git_checkout(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file() && path.join(".git").exists()
+}
+
+fn run_command(command: &mut Command) -> Result<()> {
+    println!("$ {}", display_command(command));
+    let status = command
+        .status()
+        .with_context(|| format!("run {}", display_command(command)))?;
+    if !status.success() {
+        bail!("command failed with {status}: {}", display_command(command));
+    }
+    Ok(())
+}
+
+fn display_command(command: &Command) -> String {
+    let mut parts = vec![command.get_program().to_string_lossy().into_owned()];
+    parts.extend(command.get_args().map(|arg| arg.to_string_lossy().into_owned()));
+    parts.join(" ")
+}
+
 fn init_tracing(cli: &Cli) {
     let default_filter =
         "warn,chromiumoxide::handler=error,chromiumoxide::browser=error".to_string();
@@ -85,7 +144,7 @@ fn init_tracing(cli: &Cli) {
 
     // --print mode logs to stderr (pipeable). TUI mode writes to a file so logs
     // don't clobber the alternate-screen buffer.
-    if cli.print || cli.list_bookmarks {
+    if cli.print || cli.list_bookmarks || cli.update {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(env_filter)
             .with_writer(std::io::stderr)
@@ -233,6 +292,16 @@ fn handle_event(app: &mut App, ev: Event, screen_height: u16) {
     let max = ui::max_scroll(app, body_h);
 
     match (code, modifiers) {
+        (KeyCode::Char('='), mods) | (KeyCode::Char('+'), mods)
+            if mods.contains(KeyModifiers::CONTROL) =>
+        {
+            app.adjust_font_size(1);
+            app.clamp_scroll(ui::max_scroll(app, body_h));
+        }
+        (KeyCode::Char('-'), mods) if mods.contains(KeyModifiers::CONTROL) => {
+            app.adjust_font_size(-1);
+            app.clamp_scroll(ui::max_scroll(app, body_h));
+        }
         (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             app.quit = true;
         }
@@ -240,19 +309,12 @@ fn handle_event(app: &mut App, ev: Event, screen_height: u16) {
         (KeyCode::Left, _) | (KeyCode::Char('h'), _) => app.prev_chapter(),
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => app.scroll_by(1, max),
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => app.scroll_by(-1, max),
-        (KeyCode::PageDown, _) | (KeyCode::Char(' '), _) => {
-            app.scroll_by(body_h as i32 - 1, max)
-        }
+        (KeyCode::PageDown, _) | (KeyCode::Char(' '), _) => app.scroll_by(body_h as i32 - 1, max),
         (KeyCode::PageUp, _) => app.scroll_by(-(body_h as i32 - 1), max),
         (KeyCode::Home, _) | (KeyCode::Char('g'), _) => app.scroll_by(-i32::MAX, max),
         (KeyCode::End, _) | (KeyCode::Char('G'), _) => app.scroll_by(i32::MAX, max),
         (KeyCode::Char('b'), _) => app.bookmark_current(),
-        (KeyCode::Char('r'), _) => {
-            if let Mode::Reading { url, scroll, .. } = &app.mode {
-                let (u, s) = (url.clone(), *scroll);
-                app.start_fetch(u, s);
-            }
-        }
+        (KeyCode::Char('r'), _) => app.retry_current(),
         _ => {}
     }
 }

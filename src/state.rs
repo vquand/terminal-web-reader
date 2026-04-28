@@ -14,6 +14,8 @@ pub struct State {
     pub history: HashMap<String, HistoryEntry>,
     #[serde(default)]
     pub bookmarks: Vec<Bookmark>,
+    #[serde(default)]
+    pub font_size_step: i8,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,9 +186,11 @@ mod tests {
             url: u.to_string(),
             saved_at: 123,
         });
+        s.font_size_step = 2;
         let body = toml::to_string_pretty(&s).unwrap();
         let back: State = toml::from_str(&body).unwrap();
         assert_eq!(back.lookup(&u), Some(17));
         assert_eq!(back.bookmarks[0].name, "test");
+        assert_eq!(back.font_size_step, 2);
     }
 }
