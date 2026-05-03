@@ -310,24 +310,20 @@ async fn wait_for_maincontent(page: &chromiumoxide::Page) -> Result<()> {
 }
 
 async fn click_maincontent(page: &chromiumoxide::Page) -> Result<()> {
-    let clicked = page
-        .evaluate(
-            r#"(() => {
-                const el = document.getElementById('maincontent');
-                if (!el) return Boolean(document.querySelector('[id^="cld-"]'));
-                el.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-                return true;
-            })()"#,
-        )
+    if let Ok(el) = page.find_element("#maincontent").await {
+        el.click()
+            .await
+            .context("click chapter container through browser input")?;
+        return Ok(());
+    }
+
+    let already_loaded = page
+        .evaluate(r#"(() => Boolean(document.querySelector('[id^="cld-"]')))()"#)
         .await?
         .into_value()
         .unwrap_or(false);
 
-    if !clicked {
+    if !already_loaded {
         bail!("chapter container disappeared before click");
     }
 

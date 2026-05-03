@@ -46,8 +46,8 @@ Inside the TUI:
    it sees automation.
 3. Pre-seeds cookies `foreignlang=vi` and `transmode=name` on the domain so
    the language-selection modal never appears on first load.
-4. Navigates to the chapter URL, waits ~3 seconds for `stv.readinit.js` to
-   bind its click handler on `#maincontent`, then synthesizes a click.
+4. Navigates to the chapter URL, waits for `#maincontent`, then clicks it
+   through Chromium's browser-input path so the site sees a real user gesture.
 5. Polls until `#maincontent` (renamed to `cld-<book>-<chapter>` after load)
    contains >500 characters, or 30 seconds have elapsed.
 6. Grabs the rendered DOM and extracts chapter text + book/chapter titles.
